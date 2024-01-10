@@ -39,6 +39,7 @@ namespace Network.Requests
     {
         public Socket socket = socket;
         public byte[] buffer = new byte[1024];
+        public int BufferCount = 0;
     }
 
     public static class Requests

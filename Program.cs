@@ -1,4 +1,5 @@
-﻿using Network.Proto;
+﻿using Network.Game;
+using Network.Proto;
 using Network.Requests;
 using System.Diagnostics;
 using System.Net;
@@ -11,23 +12,11 @@ public class ChattingServer
     public static Socket socket;
     public static readonly List<ClientInfo> clients = [];
 
-    public static readonly bool[] colorToken = [false, false];
-
-    private const int WIDTH = 10, HEIGHT = 10;
-    //0为黑子，1为白子，2为没有
-    public static readonly int[,] map = new int[WIDTH, HEIGHT];
-
     public static void Main(string[] args)
     {
         try
         {
-            for (int i = 0; i < WIDTH; i++)
-            {
-                for (int j = 0; j < HEIGHT; j++)
-                {
-                    map[i, j] = 2;
-                }
-            }
+            GameManager.Init();
             DBManager.Connect("unity", "127.0.0.1", 3306, "root", "123456");
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             socket.Bind(new IPEndPoint(IPAddress.Any, 8000));
@@ -55,7 +44,7 @@ public class ChattingServer
             ClientInfo clientInfo = new(clientSocket);
             clients.Add(clientInfo);
             //传入的句柄是客户端信息
-            clientSocket.BeginReceive(clientInfo.buffer, 0, clientInfo.buffer.Length, SocketFlags.None, ReceiveCallback, clientInfo);
+            clientSocket.BeginReceive(clientInfo.buffer, clientInfo.BufferCount, 1024 - clientInfo.BufferCount, SocketFlags.None, ReceiveCallback, clientInfo);
             socket.BeginAccept(AcceptCallback, socket);
         }
         catch (Exception e)
@@ -71,6 +60,7 @@ public class ChattingServer
         {
             clientInfo = ar.AsyncState as ClientInfo;
             int length = clientInfo!.socket.EndReceive(ar);
+            clientInfo!.BufferCount += length;
 
             if (!Requests.IsSocketConnected(clientInfo.socket))
             {
@@ -79,20 +69,10 @@ public class ChattingServer
                 Console.WriteLine("客户端断开");
                 return;
             }
-            //获取客户端发送的消息并反序列化处理
-            string message = Encoding.UTF8.GetString(clientInfo.buffer, 0, length);
-            Console.WriteLine($"接收到消息：{message}");
-            ProtoBase? proto = Decode(message);
-            if (proto == null)
-            {
-                Console.WriteLine("处理消息异常");
-                clientInfo.socket.BeginReceive(clientInfo.buffer, 0, clientInfo.buffer.Length, SocketFlags.None, ReceiveCallback, clientInfo);
-                return;
-            }
 
-            HandleProto(proto, clientInfo);
+            HandleReceiveData(clientInfo);
 
-            clientInfo.socket.BeginReceive(clientInfo.buffer, 0, clientInfo.buffer.Length, SocketFlags.None, ReceiveCallback, clientInfo);
+            clientInfo.socket.BeginReceive(clientInfo.buffer, clientInfo.BufferCount, 1024 - clientInfo.BufferCount, SocketFlags.None, ReceiveCallback, clientInfo);
         }
         catch (Exception e)
         {
@@ -104,6 +84,34 @@ public class ChattingServer
                 Console.WriteLine("客户端异常断开");
             }
         }
+    }
+    private static void HandleReceiveData(ClientInfo info)
+    {
+        if (info.BufferCount <= 2) return;
+        Int16 length = BitConverter.ToInt16(info.buffer, 0);
+        //真实的长度小于实际要传输的长度
+        if (info.BufferCount < length + 2) return;
+
+        //获取客户端发送的消息并反序列化处理，从第二位开始，长度为length
+        string message = Encoding.UTF8.GetString(info.buffer, 2, length);
+        Console.WriteLine($"接收到消息：{message}");
+        ProtoBase? proto = Decode(message);
+        if (proto == null)
+        {
+            Console.WriteLine("处理消息异常");
+            info.socket.BeginReceive(info.buffer, 0, info.buffer.Length, SocketFlags.None, ReceiveCallback, info);
+            return;
+        }
+
+        HandleProto(proto, info);
+
+        //下一组数据从这一组数据的结尾（start）开始，长度只剩实际读取长度减去这组数据长度（count）
+        int start = 2 + length;
+        int count = info.BufferCount - start;
+        Array.Copy(info.buffer, start, info.buffer, 0, count);
+        info.BufferCount -= start;
+
+        HandleReceiveData(info);
     }
 
     public static async void HandleProto(ProtoBase proto, ClientInfo info)
@@ -117,78 +125,13 @@ public class ChattingServer
         }
         else if (proto is ReadyProto)
         {
-            //同时发送消息会有臭名昭著的粘包问题，解决方法：
-            //在消息前加上消息长度
-            //在消息后加上消息结束符
-            //延迟发送（代码中的方法）
-            Random r = new();
-            int v = r.Next(0, 2);
-            //0为黑色，1为白色
-            if (!colorToken[v])
-            {
-                Console.WriteLine($"玩家{v}已准备就绪");
-                colorToken[v] = true;
-                ColorProto colorProto = new(v);
-                info.socket.Send(Encode(colorProto));
-                await Task.Delay(200);
-                info.socket.Send(Encode(new MessageProto($"你是{colorProto.color}")));
-            }
-            else if (!colorToken[1 - v])
-            {
-                Console.WriteLine($"玩家{1 - v}已准备就绪");
-                colorToken[1 - v] = true;
-                ColorProto colorProto = new(1 - v);
-                info.socket.Send(Encode(colorProto));
-                await Task.Delay(200);
-                info.socket.Send(Encode(new MessageProto($"你是{colorProto.color}")));
-            }
-            else
-            {
-                Console.WriteLine("连接数过多");
-            }
-            if (colorToken[0] && colorToken[1])
-            {
-                await Task.Delay(200);
-                //游戏开始
-                Console.WriteLine("所有玩家已准备就绪");
-                foreach (ClientInfo client in clients)
-                {
-                    client.socket.Send(Encode(new ReadyProto()));
-                    await Task.Delay(200);
-                    client.socket.Send(Encode(new MessageProto("所有玩家已准备就绪")));
-                }
-            }
-
+            GameManager.ClientReadyAsync(info, clients);
         }
         else if (proto is PlayProto)
         {
-            //判断是否五子连珠，发送信息
-            PlayProto playProto = proto as PlayProto;
-            Debug.Assert(playProto != null, $"playProto不可为空");
-            //点击了已有棋子的位置
-            if(map[playProto.x, playProto.y] != 2) return;
-            map[playProto.x, playProto.y] = (int)playProto.color;
-
-            //发送消息，更新棋盘
-            foreach (ClientInfo client in clients)
-            {
-                client.socket.Send(Encode(playProto));
-            }
-
-            //检查是否五子连珠
-            if (CheckWin(playProto))
-            {
-                await Task.Delay(200);
-                //游戏结束
-                foreach (ClientInfo client in clients)
-                {
-                    client.socket.Send(Encode(new EndProto(playProto.color)));
-                    await Task.Delay(200);
-                    client.socket.Send(Encode(new MessageProto($"游戏结束，{playProto.color}胜利")));
-                }
-            }
+            GameManager.ClientPlayAsync(proto, clients);
         }
-        else if(proto is LoginProto)
+        else if (proto is LoginProto)
         {
             //登录或注册
             LoginProto loginProto = proto as LoginProto;
@@ -214,38 +157,6 @@ public class ChattingServer
         }
     }
 
-    public static bool CheckWin(PlayProto proto)
-    {
-        return DFS(true, proto.x, proto.y, proto.x, proto.y, (int)proto.color, 1) || DFS(false, proto.x, proto.y, proto.x, proto.y, (int)proto.color, 1);
-    }
-
-    /// <summary>
-    /// DFS查找是否有五子连珠
-    /// </summary>
-    /// <param name="horizon">查找方向，横向还是纵向</param>
-    /// <param name="x1">原点方向的边界</param>
-    /// <param name="x2">无限方向的边界</param>
-    /// <param name="color">查找的颜色</param>
-    /// <param name="cnt">目前递归到的数量</param>
-    /// <returns>是否满足五子连珠（或者更多）</returns>
-    public static bool DFS(bool horizon, int x1, int y1, int x2, int y2, int color, int cnt)
-    {
-        if (cnt >= 5) return true;
-        //如果水平查找
-        if (horizon)
-        {
-            if (x1 - 1 >= 0 && map[x1 - 1, y1] == color) return DFS(horizon, x1 - 1, y1, x2, y2, color, cnt + 1);
-            else if (x2 + 1 < WIDTH && map[x2 + 1, y2] == color) return DFS(horizon, x1, y1, x2 + 1, y2, color, cnt + 1);
-            else return cnt >= 5;
-        }//如果垂直查找
-        else
-        {
-            if (y1 - 1 >= 0 && map[x1, y1 - 1] == color) return DFS(horizon, x1, y1 - 1, x2, y2, color, cnt + 1);
-            else if (y2 + 1 < HEIGHT && map[x2, y2 + 1] == color) return DFS(horizon, x1, y1, x2, y2 + 1, color, cnt + 1);
-            else return cnt >= 5;
-        }
-    }
-
     public static byte[] Encode(ProtoBase proto)
     {
         var name = proto.name;
@@ -260,11 +171,16 @@ public class ChattingServer
             "register" => JsonSerializer.Serialize(proto as LoginProto),
             _ => string.Empty,
         }}";
-        return Encoding.UTF8.GetBytes(msg);
+        byte[] bodyBytes = Encoding.UTF8.GetBytes(msg);
+        byte[] headBytes = BitConverter.GetBytes((Int16)bodyBytes.Length);
+        byte[] sendBytes = headBytes.Concat(bodyBytes).ToArray();
+
+        return sendBytes;
     }
 
     public static ProtoBase? Decode(string str)
     {
+        //通过\r\n分割数据头和数据体
         string[] args = str.Split("\r\n", 2);
         if (args.Length < 2)
         {
