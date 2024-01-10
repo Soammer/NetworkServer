@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "ACbAq5wRcs+5/8kLxvxb9gk9PLS1uXV2XzqlHyjOIYPitR+xaJhHh5Clre4PyW3Sxk5ZU/nl38f1akizDvP2Zw==",
+  "success": true,
+  "projectFilePath": "D:\\DeskTop\\LeetCode\\Network\\Network.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\LENOVO\\.nuget\\packages\\microsoft.extensions.logging.abstractions\\7.0.1\\microsoft.extensions.logging.abstractions.7.0.1.nupkg.sha512",
+    "C:\\Users\\LENOVO\\.nuget\\packages\\mysqlconnector\\2.3.3\\mysqlconnector.2.3.3.nupkg.sha512"
+  ],
+  "logs": []
+}
