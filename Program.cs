@@ -114,7 +114,7 @@ public class ChattingServer
         HandleReceiveData(info);
     }
 
-    public static async void HandleProto(ProtoBase proto, ClientInfo info)
+    public static void HandleProto(ProtoBase proto, ClientInfo info)
     {
         if (proto is MessageProto)
         {
