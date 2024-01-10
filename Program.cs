@@ -88,7 +88,15 @@ public class ChattingServer
     private static void HandleReceiveData(ClientInfo info)
     {
         if (info.BufferCount <= 2) return;
-        Int16 length = BitConverter.ToInt16(info.buffer, 0);
+        //先声明长度，长度为前两位
+        Int16 length;
+        //解决大小端问题
+        if (!BitConverter.IsLittleEndian)
+        {
+            byte[] n = [info.buffer[1], info.buffer[0]];
+            length = BitConverter.ToInt16(n, 0);
+        }
+        else length = BitConverter.ToInt16(info.buffer, 0);
         //真实的长度小于实际要传输的长度
         if (info.BufferCount < length + 2) return;
 
@@ -173,6 +181,8 @@ public class ChattingServer
         }}";
         byte[] bodyBytes = Encoding.UTF8.GetBytes(msg);
         byte[] headBytes = BitConverter.GetBytes((Int16)bodyBytes.Length);
+        //如果是大端机器则需要反转，统一以小段处理
+        if (!BitConverter.IsLittleEndian) headBytes.Reverse();
         byte[] sendBytes = headBytes.Concat(bodyBytes).ToArray();
 
         return sendBytes;
